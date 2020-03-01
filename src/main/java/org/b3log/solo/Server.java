@@ -135,7 +135,7 @@ public final class Server extends BaseServer {
 
         String portArg = commandLine.getOptionValue("listen_port");
         if (!Strings.isNumeric(portArg)) {
-            portArg = "8080";
+            portArg = "7777";
         }
 
         try {
