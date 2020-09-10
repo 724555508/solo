@@ -2,18 +2,12 @@
  * Solo - A small and beautiful blogging system written in Java.
  * Copyright (c) 2010-present, b3log.org
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * Solo is licensed under Mulan PSL v2.
+ * You can use this software according to the terms and conditions of the Mulan PSL v2.
+ * You may obtain a copy of Mulan PSL v2 at:
+ *         http://license.coscl.org.cn/MulanPSL2
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+ * See the Mulan PSL v2 for more details.
  */
 package org.b3log.solo;
 
@@ -22,6 +16,12 @@ import org.apache.commons.lang.StringUtils;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.Appender;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.StringLayout;
+import org.apache.logging.log4j.core.appender.WriterAppender;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.layout.PatternLayout;
 import org.b3log.latke.Latkes;
 import org.b3log.latke.event.EventManager;
 import org.b3log.latke.http.BaseServer;
@@ -34,20 +34,23 @@ import org.b3log.latke.util.Stopwatchs;
 import org.b3log.latke.util.Strings;
 import org.b3log.solo.event.B3ArticleSender;
 import org.b3log.solo.event.B3ArticleUpdater;
-import org.b3log.solo.event.B3CommentSender;
 import org.b3log.solo.event.PluginRefresher;
 import org.b3log.solo.processor.*;
 import org.b3log.solo.processor.console.*;
 import org.b3log.solo.repository.OptionRepository;
 import org.b3log.solo.service.*;
 import org.b3log.solo.util.Markdowns;
+import org.b3log.solo.util.Statics;
 import org.json.JSONObject;
+
+import java.io.StringWriter;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Server.
  *
  * @author <a href="http://88250.b3log.org">Liang Ding</a>
- * @version 3.0.0.1, Feb 21, 2020
+ * @version 3.0.1.15, Sep 9, 2020
  * @since 1.2.0
  */
 public final class Server extends BaseServer {
@@ -60,7 +63,40 @@ public final class Server extends BaseServer {
     /**
      * Solo version.
      */
-    public static final String VERSION = "3.9.0";
+    public static final String VERSION = "4.3.1";
+
+    /**
+     * In-Memory tail logger writer.
+     */
+    public static final TailStringWriter TAIL_LOGGER_WRITER = new TailStringWriter();
+
+    /**
+     * Initializes In-Memory logger. 后台增加服务端日志浏览 https://github.com/88250/solo/issues/91
+     */
+    public static void initInMemoryLogger() {
+        final LoggerContext ctx = (LoggerContext) LogManager.getContext(false);
+        final Configuration config = ctx.getConfiguration();
+        final StringLayout layout = PatternLayout.newBuilder().withPattern("[%-5p]-[%d{yyyy-MM-dd HH:mm:ss}]-[%c:%L]: %m%n").build();
+        final Appender appender = WriterAppender.createAppender(layout, null, TAIL_LOGGER_WRITER, "InMemoryTail", true, true);
+        appender.start();
+        config.addAppender(appender);
+        config.getRootLogger().addAppender(appender, Level.TRACE, null);
+        ctx.updateLoggers();
+    }
+
+    public static class TailStringWriter extends StringWriter {
+
+        private final AtomicInteger count = new AtomicInteger();
+
+        @Override
+        public void flush() {
+            super.flush();
+            if (2048 <= count.incrementAndGet()) {
+                super.getBuffer().setLength(0);
+                count.set(0);
+            }
+        }
+    }
 
     /**
      * Main.
@@ -68,43 +104,41 @@ public final class Server extends BaseServer {
      * @param args the specified arguments
      */
     public static void main(final String[] args) {
+        initInMemoryLogger();
         Stopwatchs.start("Booting");
 
         final Options options = new Options();
-        final Option listenPortOpt = Option.builder("lp").longOpt("listen_port").argName("LISTEN_PORT").
-                hasArg().desc("listen port, default is 8080").build();
+        final Option listenPortOpt = Option.builder().longOpt("listen_port").argName("LISTEN_PORT").hasArg().desc("listen port, default is 8080").build();
         options.addOption(listenPortOpt);
 
-        final Option serverSchemeOpt = Option.builder("ss").longOpt("server_scheme").argName("SERVER_SCHEME").
-                hasArg().desc("browser visit protocol, default is http").build();
+        final Option unixDomainSocketPathOpt = Option.builder().longOpt("unix_domain_socket_path").argName("UNIX_DOMAIN_SOCKET_PATH").hasArg().desc("unix domain socket path").build();
+        options.addOption(unixDomainSocketPathOpt);
+
+        final Option serverSchemeOpt = Option.builder().longOpt("server_scheme").argName("SERVER_SCHEME").hasArg().desc("browser visit protocol, default is http").build();
         options.addOption(serverSchemeOpt);
 
-        final Option serverHostOpt = Option.builder("sh").longOpt("server_host").argName("SERVER_HOST").
-                hasArg().desc("browser visit domain name, default is localhost").build();
+        final Option serverHostOpt = Option.builder().longOpt("server_host").argName("SERVER_HOST").hasArg().desc("browser visit domain name, default is localhost").build();
         options.addOption(serverHostOpt);
 
-        final Option serverPortOpt = Option.builder("sp").longOpt("server_port").argName("SERVER_PORT").
-                hasArg().desc("browser visit port, default is 8080").build();
+        final Option serverPortOpt = Option.builder().longOpt("server_port").argName("SERVER_PORT").hasArg().desc("browser visit port, default is 8080").build();
         options.addOption(serverPortOpt);
 
-        final Option staticServerSchemeOpt = Option.builder("sss").longOpt("static_server_scheme").argName("STATIC_SERVER_SCHEME").
-                hasArg().desc("browser visit static resource protocol, default is http").build();
+        final Option staticServerSchemeOpt = Option.builder().longOpt("static_server_scheme").argName("STATIC_SERVER_SCHEME").hasArg().desc("browser visit static resource protocol, default is http").build();
         options.addOption(staticServerSchemeOpt);
 
-        final Option staticServerHostOpt = Option.builder("ssh").longOpt("static_server_host").argName("STATIC_SERVER_HOST").
-                hasArg().desc("browser visit static resource domain name, default is localhost").build();
+        final Option staticServerHostOpt = Option.builder().longOpt("static_server_host").argName("STATIC_SERVER_HOST").hasArg().desc("browser visit static resource domain name, default is localhost").build();
         options.addOption(staticServerHostOpt);
 
-        final Option staticServerPortOpt = Option.builder("ssp").longOpt("static_server_port").argName("STATIC_SERVER_PORT").
-                hasArg().desc("browser visit static resource port, default is 8080").build();
+        final Option staticServerPortOpt = Option.builder().longOpt("static_server_port").argName("STATIC_SERVER_PORT").hasArg().desc("browser visit static resource port, default is 8080").build();
         options.addOption(staticServerPortOpt);
 
-        final Option runtimeModeOpt = Option.builder("rm").longOpt("runtime_mode").argName("RUNTIME_MODE").
-                hasArg().desc("runtime mode (DEVELOPMENT/PRODUCTION), default is DEVELOPMENT").build();
+        final Option staticPathOpt = Option.builder().longOpt("static_path").argName("STATIC_PATH").hasArg().desc("browser visit static resource path, default is empty").build();
+        options.addOption(staticPathOpt);
+
+        final Option runtimeModeOpt = Option.builder().longOpt("runtime_mode").argName("RUNTIME_MODE").hasArg().desc("runtime mode (DEVELOPMENT/PRODUCTION), default is DEVELOPMENT").build();
         options.addOption(runtimeModeOpt);
 
-        final Option luteHttpOpt = Option.builder("lute").longOpt("lute_http").argName("LUTE_HTTP").
-                hasArg().desc("lute http URL, default is http://localhost:8249, see https://github.com/88250/lute-http for more details").build();
+        final Option luteHttpOpt = Option.builder().longOpt("lute_http").argName("LUTE_HTTP").hasArg().desc("lute http URL, default is http://localhost:8249, see https://github.com/88250/lute-http for more details").build();
         options.addOption(luteHttpOpt);
 
         options.addOption("h", "help", false, "print help for the command");
@@ -123,26 +157,19 @@ public final class Server extends BaseServer {
             commandLine = commandLineParser.parse(options, args);
         } catch (final ParseException e) {
             helpFormatter.printHelp(cmdSyntax, header, options, footer, true);
-
             return;
         }
 
         if (commandLine.hasOption("h")) {
             helpFormatter.printHelp(cmdSyntax, header, options, footer, true);
-
             return;
-        }
-
-        String portArg = commandLine.getOptionValue("listen_port");
-        if (!Strings.isNumeric(portArg)) {
-            portArg = "7777";
         }
 
         try {
             Latkes.setScanPath("org.b3log.solo");
             Latkes.init();
         } catch (final Exception e) {
-            LOGGER.log(Level.ERROR, "Latke init failed, please configure latke.props or run with args, visit https://hacpai.com/article/1492881378588 for more details");
+            LOGGER.log(Level.ERROR, "Latke init failed, please configure latke.props or run with args, visit https://ld246.com/article/1492881378588 for more details");
 
             System.exit(-1);
         }
@@ -170,6 +197,22 @@ public final class Server extends BaseServer {
         String staticServerPort = commandLine.getOptionValue("static_server_port");
         if (null != staticServerPort) {
             Latkes.setLatkeProperty("staticServerPort", staticServerPort);
+        }
+        String staticPath = commandLine.getOptionValue("static_path");
+        if (null != staticPath) {
+            if (StringUtils.equals(staticServerHost, "cdn.jsdelivr.net")) {
+                // 如果使用了 jsDelivr，则需要加上版本号避免 CDN 缓存问题 https://github.com/88250/solo/issues/83
+                // /gh/88250/solo/src/main/resources => /gh/88250/solo@version/src/main/resources
+                if (!StringUtils.contains(staticPath, "@")) {
+                    String gitCommit = System.getenv("git_commit");
+                    if (StringUtils.isBlank(gitCommit)) {
+                        gitCommit = Server.VERSION;
+                    }
+                    LOGGER.log(Level.INFO, "Git commit [" + gitCommit + "]");
+                    staticPath = StringUtils.replace(staticPath, "/solo/", "/solo@" + gitCommit + "/");
+                }
+            }
+            Latkes.setLatkeProperty("staticPath", staticPath);
         }
         String runtimeMode = commandLine.getOptionValue("runtime_mode");
         if (null != runtimeMode) {
@@ -200,12 +243,6 @@ public final class Server extends BaseServer {
             }
         }
 
-        Dispatcher.startRequestHandler = new BeforeRequestHandler();
-        Dispatcher.HANDLERS.add(1, new SkinHandler());
-        Dispatcher.HANDLERS.add(2, new InitCheckHandler());
-        Dispatcher.HANDLERS.add(3, new PermalinkHandler());
-        Dispatcher.endRequestHandler = new AfterRequestHandler();
-
         routeProcessors();
 
         final Latkes.RuntimeDatabase runtimeDatabase = Latkes.getRuntimeDatabase();
@@ -227,6 +264,8 @@ public final class Server extends BaseServer {
 
         final InitService initService = beanManager.getReference(InitService.class);
         initService.initTables();
+
+        Statics.clear();
 
         if (initService.isInited()) {
             // Upgrade check https://github.com/b3log/solo/issues/12040
@@ -275,7 +314,16 @@ public final class Server extends BaseServer {
         LOGGER.log(Level.DEBUG, "Stopwatch: {}{}", Strings.LINE_SEPARATOR, Stopwatchs.getTimingStat());
         Stopwatchs.release();
 
-        server.start(Integer.parseInt(portArg));
+        final String unixDomainSocketPath = commandLine.getOptionValue("unix_domain_socket_path");
+        if (StringUtils.isNotBlank(unixDomainSocketPath)) {
+            server.start(unixDomainSocketPath);
+        } else {
+            String portArg = commandLine.getOptionValue("listen_port");
+            if (!Strings.isNumeric(portArg)) {
+                portArg = "7777";
+            }
+            server.start(Integer.parseInt(portArg));
+        }
     }
 
     /**
@@ -286,9 +334,7 @@ public final class Server extends BaseServer {
      */
     private static void loadPreference() {
         Stopwatchs.start("Load Preference");
-
         LOGGER.debug("Loading preference....");
-
         final BeanManager beanManager = BeanManager.getInstance();
         final OptionQueryService optionQueryService = beanManager.getReference(OptionQueryService.class);
         JSONObject skin;
@@ -306,16 +352,11 @@ public final class Server extends BaseServer {
                 return;
             }
 
-            final String showClodeBlockLn = preference.optString(org.b3log.solo.model.Option.ID_C_SHOW_CODE_BLOCK_LN);
-            Markdowns.SHOW_CODE_BLOCK_LN = StringUtils.equalsIgnoreCase(showClodeBlockLn, "true");
-            final String showToC = preference.optString(org.b3log.solo.model.Option.ID_C_SHOW_TOC);
-            Markdowns.SHOW_TOC = StringUtils.equalsIgnoreCase(showToC, "true");
+            Markdowns.loadMarkdownOption(preference);
         } catch (final Exception e) {
             LOGGER.log(Level.ERROR, e.getMessage(), e);
-
             System.exit(-1);
         }
-
         Stopwatchs.end();
     }
 
@@ -336,8 +377,6 @@ public final class Server extends BaseServer {
             eventManager.registerListener(articleSender);
             final B3ArticleUpdater articleUpdater = beanManager.getReference(B3ArticleUpdater.class);
             eventManager.registerListener(articleUpdater);
-            final B3CommentSender commentSender = beanManager.getReference(B3CommentSender.class);
-            eventManager.registerListener(commentSender);
         } catch (final Exception e) {
             LOGGER.log(Level.ERROR, "Register event handlers failed", e);
 
@@ -366,6 +405,12 @@ public final class Server extends BaseServer {
     }
 
     public static void routeProcessors() {
+        Dispatcher.startRequestHandler = new BeforeRequestHandler();
+        Dispatcher.HANDLERS.add(1, new SkinHandler());
+        Dispatcher.HANDLERS.add(2, new InitCheckHandler());
+        Dispatcher.HANDLERS.add(3, new PermalinkHandler());
+        Dispatcher.endRequestHandler = new AfterRequestHandler();
+
         routeConsoleProcessors();
         routeIndexProcessors();
         Dispatcher.mapping();
@@ -376,14 +421,15 @@ public final class Server extends BaseServer {
      */
     private static void routeIndexProcessors() {
         final BeanManager beanManager = BeanManager.getInstance();
+        final StaticMidware staticMidware = beanManager.getReference(StaticMidware.class);
 
         final ArticleProcessor articleProcessor = beanManager.getReference(ArticleProcessor.class);
         final Dispatcher.RouterGroup articleGroup = Dispatcher.group();
         articleGroup.post("/console/markdown/2html", articleProcessor::markdown2HTML).
                 get("/console/article-pwd", articleProcessor::showArticlePwdForm).
                 post("/console/article-pwd", articleProcessor::onArticlePwdForm).
-                post("/articles/random", articleProcessor::getRandomArticles).
-                get("/article/id/{id}/relevant/articles", articleProcessor::getRelevantArticles).
+                get("/articles/random.json", articleProcessor::getRandomArticles).
+                get("/article/relevant/{id}.json", articleProcessor::getRelevantArticles).
                 get("/get-article-content", articleProcessor::getArticleContent).
                 get("/articles", articleProcessor::getArticlesByPage).
                 get("/articles/tags/{tagTitle}", articleProcessor::getTagArticlesByPage).
@@ -395,8 +441,7 @@ public final class Server extends BaseServer {
 
         final B3Receiver b3Receiver = beanManager.getReference(B3Receiver.class);
         final Dispatcher.RouterGroup b3Group = Dispatcher.group();
-        b3Group.router().post().put().uri("/apis/symphony/article").handler(b3Receiver::postArticle).
-                put("/apis/symphony/comment", b3Receiver::addComment);
+        b3Group.post("/apis/symphony/article", b3Receiver::receiveArticle);
 
         final BlogProcessor blogProcessor = beanManager.getReference(BlogProcessor.class);
         final Dispatcher.RouterGroup blogGroup = Dispatcher.group();
@@ -406,22 +451,22 @@ public final class Server extends BaseServer {
 
         final CategoryProcessor categoryProcessor = beanManager.getReference(CategoryProcessor.class);
         final Dispatcher.RouterGroup categoryGroup = Dispatcher.group();
+        categoryGroup.middlewares(staticMidware::handle);
         categoryGroup.get("/articles/category/{categoryURI}", categoryProcessor::getCategoryArticlesByPage).
                 get("/category/{categoryURI}", categoryProcessor::showCategoryArticles);
 
-        final CommentProcessor commentProcessor = beanManager.getReference(CommentProcessor.class);
-        final Dispatcher.RouterGroup commentGroup = Dispatcher.group();
-        commentGroup.post("/article/comments", commentProcessor::addArticleComment);
-
         final FeedProcessor feedProcessor = beanManager.getReference(FeedProcessor.class);
         final Dispatcher.RouterGroup feedGroup = Dispatcher.group();
+        feedGroup.middlewares(staticMidware::handle);
         feedGroup.router().get().head().uri("/atom.xml").handler(feedProcessor::blogArticlesAtom).
                 get().head().uri("/rss.xml").handler(feedProcessor::blogArticlesRSS);
 
         final IndexProcessor indexProcessor = beanManager.getReference(IndexProcessor.class);
         final Dispatcher.RouterGroup indexGroup = Dispatcher.group();
+        indexGroup.middlewares(staticMidware::handle);
         indexGroup.router().get(new String[]{"", "/", "/index.html"}, indexProcessor::showIndex);
-        indexGroup.get("/start", indexProcessor::showStart).
+        indexGroup.get("/favicon.ico", indexProcessor::showFavicon).
+                get("/start", indexProcessor::showStart).
                 get("/logout", indexProcessor::logout).
                 get("/kill-browser", indexProcessor::showKillBrowser);
 
@@ -437,14 +482,17 @@ public final class Server extends BaseServer {
 
         final SitemapProcessor sitemapProcessor = beanManager.getReference(SitemapProcessor.class);
         final Dispatcher.RouterGroup sitemapGroup = Dispatcher.group();
+        sitemapGroup.middlewares(staticMidware::handle);
         sitemapGroup.get("/sitemap.xml", sitemapProcessor::sitemap);
 
         final TagProcessor tagProcessor = beanManager.getReference(TagProcessor.class);
         final Dispatcher.RouterGroup tagGroup = Dispatcher.group();
+        tagGroup.middlewares(staticMidware::handle);
         tagGroup.get("/tags/{tagTitle}", tagProcessor::showTagArticles);
 
         final UserTemplateProcessor userTemplateProcessor = beanManager.getReference(UserTemplateProcessor.class);
         final Dispatcher.RouterGroup userTemplateGroup = Dispatcher.group();
+        userTemplateGroup.middlewares(staticMidware::handle);
         userTemplateGroup.get("/{name}.html", userTemplateProcessor::showPage);
     }
 
@@ -464,10 +512,10 @@ public final class Server extends BaseServer {
                 get("/admin-preference.do", adminConsole::showAdminPreferenceFunction).
                 get("/console/export/sql", adminConsole::exportSQL).
                 get("/console/export/json", adminConsole::exportJSON).
-                get("/console/export/hexo", adminConsole::exportHexo);
+                get("/console/export/hexo", adminConsole::exportHexo).
+                post("/console/import/markdown-zip", adminConsole::importMarkdownZip);
         adminConsoleGroup.router().get(new String[]{"/admin-article.do",
                 "/admin-article-list.do",
-                "/admin-comment-list.do",
                 "/admin-link-list.do",
                 "/admin-page-list.do",
                 "/admin-others.do",
@@ -494,18 +542,10 @@ public final class Server extends BaseServer {
                 put("/console/article/", articleConsole::updateArticle).
                 post("/console/article/", articleConsole::addArticle);
 
-        final CommentConsole commentConsole = beanManager.getReference(CommentConsole.class);
-        final Dispatcher.RouterGroup commentConsoleGroup = Dispatcher.group();
-        commentConsoleGroup.middlewares(consoleAuthMidware::handle);
-        commentConsoleGroup.delete("/console/article/comment/{id}", commentConsole::removeArticleComment).
-                get("/console/comments/{page}/{pageSize}/{windowSize}", commentConsole::getComments).
-                get("/console/comments/article/{id}", commentConsole::getArticleComments);
-
         final TagConsole tagConsole = beanManager.getReference(TagConsole.class);
         final Dispatcher.RouterGroup tagConsoleGroup = Dispatcher.group();
         tagConsoleGroup.middlewares(consoleAuthMidware::handle);
-        tagConsoleGroup.get("/console/tags", tagConsole::getTags).
-                get("/console/tag/unused", tagConsole::getUnusedTags);
+        tagConsoleGroup.get("/console/tags", tagConsole::getTags);
 
         final CategoryConsole categoryConsole = beanManager.getReference(CategoryConsole.class);
         final Dispatcher.RouterGroup categoryGroup = Dispatcher.group();
@@ -569,6 +609,7 @@ public final class Server extends BaseServer {
         otherConsoleGroup.middlewares(consoleAdminAuthMidware::handle);
         otherConsoleGroup.delete("/console/archive/unused", otherConsole::removeUnusedArchives).
                 delete("/console/tag/unused", otherConsole::removeUnusedTags);
+        otherConsoleGroup.get("/console/log", otherConsole::getLog);
 
         final UserConsole userConsole = beanManager.getReference(UserConsole.class);
         final Dispatcher.RouterGroup userConsoleGroup = Dispatcher.group();
@@ -583,6 +624,9 @@ public final class Server extends BaseServer {
         final Dispatcher.RouterGroup staticSiteConsoleGroup = Dispatcher.group();
         staticSiteConsoleGroup.middlewares(consoleAdminAuthMidware::handle);
         staticSiteConsoleGroup.put("/console/staticsite", staticSiteConsole::genSite);
+
+        final FetchUploadProcessor fetchUploadProcessor = beanManager.getReference(FetchUploadProcessor.class);
+        Dispatcher.post("/upload/fetch", fetchUploadProcessor::fetchUpload, consoleAuthMidware::handle);
     }
 
     /**
