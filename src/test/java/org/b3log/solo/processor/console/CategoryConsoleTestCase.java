@@ -1,5 +1,4 @@
-<<<<<<< HEAD
-=======
+
 /*
  * Solo - A small and beautiful blogging system written in Java.
  * Copyright (c) 2010-present, b3log.org
@@ -177,4 +176,3 @@ public class CategoryConsoleTestCase extends AbstractTestCase {
         Assert.assertTrue(StringUtils.contains(content, "code\":0"));
     }
 }
->>>>>>> refs/tags/v4.3.1
